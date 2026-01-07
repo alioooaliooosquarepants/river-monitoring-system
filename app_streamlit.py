@@ -1,17 +1,18 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import pickle
 import time
-import threading
-import json
-import os
-from paho.mqtt import client as mqtt
+import logging
 
 # ===========================
 # CONFIG
 # ===========================
-MODEL_PATH = "decision_tree.pkl"
-CSV_PATH = "river_data_log.csv"
+MODEL_FILE = "decision_tree.pkl"  # Dedicated to Decision Tree model
+CSV_FILE = "river_data_log.csv"
+REFRESH_INTERVAL = 3  # detik
+LABELS = ["Aman", "Waspada", "Bahaya"]
+STANDARD_WATER_HEIGHT = st.sidebar.number_input("Standard Water Height (cm)", min_value=0.0, max_value=1000.0, value=50.0, step=1.0)
 
 # ===========================
 # HELPERS
@@ -41,80 +42,42 @@ def status_box(title, level, mode="danger"):
             <h3 style="color:white;">{text}</h3>
         </div>
     """, unsafe_allow_html=True)
-with open(MODEL_PATH, "rb") as f:
-    model = pickle.load(f)
 
 # ===========================
-# INIT CSV IF NOT EXISTS
+# LOGGING
 # ===========================
-if not os.path.exists(CSV_PATH):
-    df0 = pd.DataFrame(columns=[
-        "timestamp",
-        "water_level_cm",
-        "rain_level",
-        "danger_level",
-        "humidity_pct",
-        "temperature_c",
-        "datetime"
-    ])
-    df0.to_csv(CSV_PATH, index=False)
+logging.basicConfig(filename="audit_log.txt", level=logging.INFO, format='%(asctime)s %(message)s')
+
+def log_event(event):
+    logging.info(event)
 
 # ===========================
-# GLOBAL VARIABLE
+# DATA LOADING & CLEANING
 # ===========================
-latest_mqtt = None
-mqtt_lock = threading.Lock()
+@st.cache_data(ttl=REFRESH_INTERVAL)
+def load_data():
+    df = pd.read_csv(CSV_FILE)
+    df = df.sort_values("timestamp")
+    # Range check & noise filter
+    df = df[(df["water_level_cm"].between(0, 1000)) &
+            (df["temperature_c"].between(-10, 80)) &
+            (df["humidity_pct"].between(0, 100))]
+    df = df.fillna(method="ffill").fillna(method="bfill")  # handle missing data
+    # Normalization
+    df["water_level_norm"] = df["water_level_cm"] / STANDARD_WATER_HEIGHT
+    # Water rise rate
+    df["water_rise_rate"] = df["water_level_cm"].diff().fillna(0)
+    # Rain binary
+    df["rain"] = (df["rain_level"] > 0).astype(int)
+    return df
 
-# ===========================
-# MQTT CALLBACK
-# ===========================
-def on_message(client, userdata, msg):
-    global latest_mqtt
-
+@st.cache_resource
+def load_model():
     try:
-        payload = msg.payload.decode()
-
-        try:
-            raw = json.loads(payload)
-            data = {
-                "timestamp": raw.get("timestamp", None),
-                "water_level_cm": float(raw.get("water_level_cm", 0)),
-                "rain_level": int(raw.get("rain_level", 0)),
-                "danger_level": int(raw.get("danger_level", 0)),
-                "humidity_pct": float(raw.get("humidity_pct", 0)),
-                "temperature_c": float(raw.get("temperature_c", 0)),
-            }
-
-        except:
-            # fallback CSV-like "water,rain,danger,hum"
-            parts = payload.split(",")
-            data = {
-                "timestamp": None,
-                "water_level_cm": float(parts[0]),
-                "rain_level": int(parts[1]),
-                "danger_level": int(parts[2]),
-                "humidity_pct": float(parts[3]),
-                "temperature_c": None
-            }
-
-        with mqtt_lock:
-            latest_mqtt = data
-
-    except Exception as e:
-        print("MQTT error:", e)
-
-
-def mqtt_thread():
-    client = mqtt.Client()
-    client.on_message = on_message
-    client.connect(MQTT_BROKER, MQTT_PORT)
-    client.subscribe(MQTT_TOPIC)
-    client.loop_forever()
-
-
-# START BACKGROUND MQTT LISTENER
-mqtt_bg = threading.Thread(target=mqtt_thread, daemon=True)
-mqtt_bg.start()
+        model = pickle.load(open(MODEL_FILE, "rb"))
+        return model
+    except Exception:
+        return None
 
 # ===========================
 # STREAMLIT SETTINGS
