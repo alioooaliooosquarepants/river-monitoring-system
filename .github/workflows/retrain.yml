@@ -1,0 +1,39 @@
+name: Retrain Model
+
+on:
+  push:
+    paths:
+      - 'river_data_log.csv'
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Fetch full history for proper git operations
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pandas numpy scikit-learn
+
+    - name: Retrain model
+      run: python retrain_model.py
+
+    - name: Commit and push updated model
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add decision_tree.pkl
+        git commit -m "Update model after retraining" || echo "No changes to commit"
+        git push
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
