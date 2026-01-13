@@ -211,9 +211,3 @@ if model is not None and not df.empty:
         log_event(f"Prediction: {pred} (confidence: {confidence})")
 else:
     st.warning("Model belum tersedia atau data kosong.")
-
-# ========== VISUALIZATION ==========
-st.subheader("📈 Water Level Over Time")
-st.line_chart(df.set_index("timestamp")["water_level_cm"])
-
-st.info("Training model dilakukan manual/terjadwal. Data waktu tidak digunakan sebagai fitur input model.")
