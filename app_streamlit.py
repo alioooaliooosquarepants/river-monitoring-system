@@ -5,20 +5,55 @@ import pickle
 import time
 import logging
 
-# ========== CONFIGURABLES ==========
-CSV_FILE = "river_data_log.csv"
+# ===========================
+# CONFIG
+# ===========================
 MODEL_FILE = "decision_tree.pkl"  # Dedicated to Decision Tree model
+CSV_FILE = "river_data_log.csv"
 REFRESH_INTERVAL = 3  # detik
 LABELS = ["Aman", "Waspada", "Bahaya"]
 STANDARD_WATER_HEIGHT = st.sidebar.number_input("Standard Water Height (cm)", min_value=0.0, max_value=1000.0, value=50.0, step=1.0)
 
-# ========== LOGGING ==========
+# ===========================
+# HELPERS
+# ===========================
+def normalize_emoji(label):
+    l = label.upper()
+    return {
+        "AMAN": "🟢",
+        "WASPADA": "🟡",
+        "BAHAYA": "🔴"
+    }.get(l, "❓")
+
+def status_box(title, level, mode="danger"):
+    if mode == "danger":
+        if level == 0: color="#4fc3f7"; emoji="🟢"; text="SAFE"
+        elif level == 1: color="#29b6f6"; emoji="🟡"; text="WARNING"
+        else: color="#0277bd"; emoji="🔴"; text="DANGEROUS"
+    elif mode == "rain":
+        if level == 0: color="#4fc3f7"; emoji="🌤️"; text="NO RAIN"
+        elif level == 1: color="#29b6f6"; emoji="🌦️"; text="LIGHT RAIN"
+        else: color="#0277bd"; emoji="🌧️"; text="HEAVY RAIN"
+
+    st.markdown(f"""
+        <div style="padding:20px; border-radius:15px; background:{color}; text-align:center;">
+            <h2 style="color:white;">{title}</h2>
+            <h1 style="color:white; font-size:50px;">{emoji}</h1>
+            <h3 style="color:white;">{text}</h3>
+        </div>
+    """, unsafe_allow_html=True)
+
+# ===========================
+# LOGGING
+# ===========================
 logging.basicConfig(filename="audit_log.txt", level=logging.INFO, format='%(asctime)s %(message)s')
 
 def log_event(event):
     logging.info(event)
 
-# ========== DATA LOADING & CLEANING ==========
+# ===========================
+# DATA LOADING & CLEANING
+# ===========================
 @st.cache_data(ttl=REFRESH_INTERVAL)
 def load_data():
     df = pd.read_csv(CSV_FILE)
@@ -44,6 +79,21 @@ def load_model():
     except Exception:
         return None
 
+# ===========================
+# STREAMLIT SETTINGS
+# ===========================
+st.set_page_config(page_title="River Monitor + MQTT + ML", layout="wide")
+st.title("🌊 River Monitoring Dashboard — Real-Time + Prediction")
+
+# Blue-ish background
+st.markdown("""
+<style>
+body {
+    background-color: #e0f7fa;
+}
+</style>
+""", unsafe_allow_html=True)
+
 # ========== SIDEBAR ==========
 st.sidebar.title("Pengaturan")
 refresh = st.sidebar.button("Refresh Sekarang")
@@ -58,15 +108,41 @@ manual_danger = st.sidebar.selectbox("Manual Danger Level Override", [None, "Ama
 submit_manual = st.sidebar.button("Submit Manual Override")
 
 # ========== MAIN ==========
-st.title("Visualisasi & Prediksi Ketinggian Air Sungai")
 df = load_data()
 
 if refresh:
     st.cache_data.clear()
     df = load_data()
+    log_event("Data refreshed manually")
 
-st.write(f"Data terbaru (auto-refresh {REFRESH_INTERVAL} detik):")
-st.dataframe(df.tail(10))
+log_event(f"Dashboard accessed, data points: {len(df)}")
+
+if df.empty:
+    st.info("Waiting for data...")
+    st.stop()
+
+# 2. Use last row
+last = df.iloc[-1]
+
+water = last["water_level_cm"]
+rain = last["rain"]
+danger = last["danger_level"] if "danger_level" in df.columns else 0
+hum = last["humidity_pct"]
+
+# ===========================
+# DISPLAY UI
+# ===========================
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.metric("Water Level (cm)", water)
+with col2:
+    status_box("Danger Level", int(danger), mode="danger")
+with col3:
+    status_box("Rain Level", int(rain), mode="rain")
+
+st.subheader("📈 Water Level Over Time")
+st.line_chart(df["water_level_cm"])
 
 # ========== PREDICTION ==========
 fitur = ["water_level_norm", "water_rise_rate", "rain", "humidity_pct"]
@@ -120,23 +196,24 @@ if model is not None and not df.empty:
         st.error(f"ALERT: Status Sungai {pred} (confidence: {confidence:.2f})")
         log_event(f"ML ALERT: {pred} (confidence: {confidence})")
     else:
-        st.subheader("Prediksi Status Sungai:")
-        st.write(f"**{pred}**" + (f" (confidence: {confidence:.2f})" if confidence else ""))
+        st.subheader("🤖 Predicted Condition (Decision Tree)")
+        label = pred
+        emoji = normalize_emoji(label)
+
+        st.markdown(f"""
+            <div style="padding:25px; border-radius:15px; background:#0277bd; color:white; text-align:center;">
+                <h2>Prediction:</h2>
+                <h1 style="font-size:60px;">{emoji}</h1>
+                <h1>{label}</h1>
+                {f"<p>Confidence: {confidence:.2f}</p>" if confidence else ""}
+            </div>
+        """, unsafe_allow_html=True)
         log_event(f"Prediction: {pred} (confidence: {confidence})")
 else:
     st.warning("Model belum tersedia atau data kosong.")
 
 # ========== VISUALIZATION ==========
-st.subheader("Grafik Ketinggian Air")
+st.subheader("📈 Water Level Over Time")
 st.line_chart(df.set_index("timestamp")["water_level_cm"])
-
-st.subheader("Grafik Laju Kenaikan Air")
-st.line_chart(df.set_index("timestamp")["water_rise_rate"])
-
-st.subheader("Grafik Kelembapan")
-st.line_chart(df.set_index("timestamp")["humidity_pct"])
-
-st.subheader("Grafik Hujan (Biner)")
-st.line_chart(df.set_index("timestamp")["rain"])
 
 st.info("Training model dilakukan manual/terjadwal. Data waktu tidak digunakan sebagai fitur input model.")
