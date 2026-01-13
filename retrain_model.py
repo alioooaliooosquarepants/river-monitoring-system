@@ -4,6 +4,7 @@
 import pandas as pd
 import numpy as np
 import pickle
+import subprocess
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
@@ -70,7 +71,20 @@ def retrain_model():
         pickle.dump(model, f)
 
     print("Model saved to", MODEL_FILE)
+
+    # Auto-commit and push to GitHub
+    try:
+        subprocess.run(["git", "add", MODEL_FILE], check=True)
+        subprocess.run(["git", "commit", "-m", f"Update model - accuracy: {accuracy:.2f}"], check=True)
+        subprocess.run(["git", "push"], check=True)
+        print("Model pushed to GitHub successfully.")
+    except subprocess.CalledProcessError as e:
+        print(f"Git push failed: {e}")
+
     return True
 
 if __name__ == "__main__":
-    retrain_model()
+    import time
+    while True:
+        retrain_model()
+        time.sleep(120)  # Retrain every 2 minutes
